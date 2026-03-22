@@ -1,0 +1,20 @@
+# Dockerfile.client — Test client image
+# Lightweight: only needs 'requests' library
+FROM python:3.11-slim
+
+LABEL description="Multi-turn test client for LLM Privacy Gateway"
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir requests
+
+COPY tests/ ./tests/
+
+# Non-root user
+RUN useradd -m -u 1001 client
+USER client
+
+# Gateway URL is overridden at runtime via docker-compose environment
+ENV GATEWAY_URL=http://gateway:8000/v1/chat/completions
+
+CMD ["python", "tests/client_test.py"]

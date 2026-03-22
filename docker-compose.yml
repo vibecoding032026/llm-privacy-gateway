@@ -1,0 +1,66 @@
+services:
+
+  # ── Gateway (server) ──────────────────────────────────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llm-privacy-gateway:latest
+    container_name: llm-gateway
+    ports:
+      - "8000:8000"          # expose to host for direct testing with curl
+    env_file:
+      - .env                 # loads OPENAI_API_KEY, OPENAI_BASE_URL
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CHROMA_PATH=/data/chroma_db
+    volumes:
+      - chroma_data:/data/chroma_db
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+
+  # ── Streamlit Web UI ───────────────────────────────────────────────────────
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    image: llm-privacy-ui:latest
+    container_name: llm-ui
+    ports:
+      - "8501:8501"
+    environment:
+      - GATEWAY_URL=http://gateway:8000
+      - MODEL=gpt-4o-mini
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Client (test runner) ──────────────────────────────────────────────────
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    image: llm-privacy-client:latest
+    container_name: llm-client
+    environment:
+      - GATEWAY_URL=http://gateway:8000/v1/chat/completions
+      - SESSION_ID=docker-session-001
+      - MODEL=gpt-4o-mini
+    depends_on:
+      gateway:
+        condition: service_healthy   # wait until /health returns 200
+    restart: "no"                    # run once, then exit
+
+volumes:
+  chroma_data:
+    driver: local

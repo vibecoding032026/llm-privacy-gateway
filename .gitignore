@@ -1,0 +1,31 @@
+# Environment & secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# ChromaDB data (local vector store, không push)
+chroma_db/
+
+# Logs
+logs/
+
+# Test reports
+tests/reports/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
