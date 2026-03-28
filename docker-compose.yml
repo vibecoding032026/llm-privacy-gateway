@@ -1,21 +1,23 @@
 services:
 
-  # ── Gateway (server) ──────────────────────────────────────────────────────
+  # ── Gateway (FastAPI server) ───────────────────────────────────────────────
   gateway:
     build:
       context: .
       dockerfile: Dockerfile
-    image: llm-privacy-gateway:latest
+    image: llm-privacy-gateway:1.5.0
     container_name: llm-gateway
     ports:
-      - "8000:8000"          # expose to host for direct testing with curl
+      - "8000:8000"
     env_file:
-      - .env                 # loads OPENAI_API_KEY, OPENAI_BASE_URL
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - DB_PATH=/data/users.db
+      - LOG_DIR=/data/logs
       - CHROMA_PATH=/data/chroma_db
     volumes:
-      - chroma_data:/data/chroma_db
+      - gateway_data:/data
     restart: unless-stopped
     healthcheck:
       test:
@@ -23,9 +25,9 @@ services:
         - python
         - -c
         - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
-      interval: 10s
+      interval: 15s
       timeout: 5s
-      start_period: 15s
+      start_period: 25s
       retries: 5
 
   # ── Streamlit Web UI ───────────────────────────────────────────────────────
@@ -33,34 +35,29 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.ui
-    image: llm-privacy-ui:latest
+    image: llm-privacy-ui:1.5.0
     container_name: llm-ui
     ports:
       - "8501:8501"
     environment:
       - GATEWAY_URL=http://gateway:8000
+      - GATEWAY_BASE=http://gateway:8000
       - MODEL=gpt-4o-mini
     depends_on:
       gateway:
         condition: service_healthy
     restart: unless-stopped
-
-  # ── Client (test runner) ──────────────────────────────────────────────────
-  client:
-    build:
-      context: .
-      dockerfile: Dockerfile.client
-    image: llm-privacy-client:latest
-    container_name: llm-client
-    environment:
-      - GATEWAY_URL=http://gateway:8000/v1/chat/completions
-      - SESSION_ID=docker-session-001
-      - MODEL=gpt-4o-mini
-    depends_on:
-      gateway:
-        condition: service_healthy   # wait until /health returns 200
-    restart: "no"                    # run once, then exit
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
 
 volumes:
-  chroma_data:
+  gateway_data:
     driver: local

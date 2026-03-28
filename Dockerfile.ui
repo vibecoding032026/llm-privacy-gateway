@@ -1,12 +1,15 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
+LABEL version="1.5.0"
 LABEL maintainer="LLM Privacy Gateway"
 LABEL description="Streamlit Web UI for LLM Privacy Gateway"
 
 WORKDIR /app
 
-# Chỉ cần streamlit và requests cho UI
-RUN pip install --no-cache-dir streamlit==1.38.0 requests>=2.31.0
+RUN pip install --no-cache-dir \
+    streamlit==1.38.0 \
+    requests>=2.31.0 \
+    pandas>=2.0.0
 
 COPY ui/ ./ui/
 
