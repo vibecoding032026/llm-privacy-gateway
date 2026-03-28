@@ -69,7 +69,7 @@ PATTERNS: List[Tuple[str, re.Pattern]] = [
     # ── Absolute file-system paths (common in logs) ──────────────────────────
     (
         "PATH",
-        re.compile(r"(?:/[\w.\-]+){2,}"),   # /var/log/nginx/error.log
+        re.compile(r"(?:/[\w.\-]+){4,}"),   # /var/log/nginx/error.log (≥4 segments)
     ),
 ]
 

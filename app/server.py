@@ -25,12 +25,18 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 import httpx
 from dotenv import load_dotenv
+
+# load_dotenv() PHẢI chạy trước khi import các module app khác,
+# vì dependencies.py đọc ADMIN_EMAILS từ env tại module-level.
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
@@ -39,6 +45,14 @@ from .state import masker
 from .config import validate_role, get_role_prompt, DEFAULT_ROLE
 from .request_logger import log_error, log_mask, log_oapi, log_recv, log_send
 from .rag import router as rag_router
+from .auth_router import router as auth_router
+from .admin_router import router as admin_router
+from .stats_router import router as stats_router
+from .apikey_router import router as apikey_router
+from .register_router import router as register_router
+from .dependencies import CurrentUser, get_current_user
+from .db import init_db
+from .usage_logger import log_usage
 
 # ---------------------------------------------------------------------------
 # System prompt phân tích log block
@@ -63,7 +77,6 @@ Lưu ý quan trọng:
 # ---------------------------------------------------------------------------
 # Khởi động
 # ---------------------------------------------------------------------------
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,8 +84,18 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%SZ",
 )
 
-app = FastAPI(title="LLM Privacy Gateway", version="1.2.0")
+app = FastAPI(title="LLM Privacy Gateway", version="1.4.0")
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(stats_router)
 app.include_router(rag_router)
+app.include_router(apikey_router)
+app.include_router(register_router)
+
+@app.on_event("startup")
+async def _startup() -> None:
+    init_db()
+    logging.getLogger("gateway").info("Database khởi tạo thành công.")
 
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
@@ -156,7 +179,10 @@ def _mask_messages(messages: list[dict], session_id: str, request_id: str) -> li
 # ---------------------------------------------------------------------------
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: Request) -> JSONResponse:
+async def chat_completions(
+    request: Request,
+    current_user: CurrentUser,
+) -> JSONResponse:
     body: dict[str, Any] = await request.json()
 
     request_id: str = uuid.uuid4().hex[:8].upper()
@@ -167,10 +193,13 @@ async def chat_completions(request: Request) -> JSONResponse:
     )
     model: str = body.get("model", "unknown")
     messages: list[dict] = body.get("messages", [])
-    role: str = validate_role(body.get("role", DEFAULT_ROLE))
+    # Role luôn lấy từ JWT (đã được đồng bộ với DB trong dependency)
+    role: str = current_user["role"]
 
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured.")
+    if not isinstance(messages, list):
+        raise HTTPException(status_code=422, detail="'messages' phải là array.")
     if not messages:
         raise HTTPException(status_code=422, detail="'messages' array is required.")
 
@@ -190,6 +219,10 @@ async def chat_completions(request: Request) -> JSONResponse:
     )
 
     # ── Stage 2: MASK — ẩn danh dữ liệu nhạy cảm ─────────────────────────────
+    # Strip system messages từ client — ngăn prompt injection qua role system
+    # Gateway tự inject role prompt, không cho phép client override system context
+    messages = [m for m in messages if m.get("role") != "system"]
+
     # Inject role prompt trước → rồi mới mask (để mask được cả nội dung role prompt nếu có)
     messages_with_role = _inject_role_prompt(list(messages), get_role_prompt(role))
     messages_before_mask = copy.deepcopy(messages_with_role)
@@ -213,6 +246,9 @@ async def chat_completions(request: Request) -> JSONResponse:
 
     # Log block phức tạp cần thêm thời gian → tăng timeout lên 180s
     oai_timeout = 180.0 if is_log_block else 90.0
+
+    # Bắt đầu đo latency từ lúc gửi lên OpenAI
+    _t0 = time.monotonic()
 
     # Retry với exponential backoff cho lỗi mạng tạm thời (DNS, connection reset...)
     _MAX_RETRIES = 3
@@ -300,6 +336,27 @@ async def chat_completions(request: Request) -> JSONResponse:
         choices_after=result.get("choices", []),
     )
 
+    # Ghi usage log
+    _latency_ms = int((time.monotonic() - _t0) * 1000)
+    _usage_info  = result.get("usage", {})
+    _masked_count = sum(
+        len(re.findall(r'\[[A-Z]+_\d+\]', m.get("content", "")))
+        for m in masked_without_system
+    )
+    log_usage(
+        user=current_user,
+        request_id=request_id,
+        session_id=session_id,
+        usage_type="CHAT",
+        model=model,
+        prompt_tokens=_usage_info.get("prompt_tokens", 0),
+        completion_tokens=_usage_info.get("completion_tokens", 0),
+        total_tokens=_usage_info.get("total_tokens", 0),
+        latency_ms=_latency_ms,
+        masked_entities=_masked_count,
+        ok=True,
+    )
+
     return JSONResponse(content=result)
 
 
@@ -313,7 +370,7 @@ async def health() -> dict:
 
 
 @app.get("/v1/session/{session_id}/stats")
-async def session_stats(session_id: str) -> dict:
+async def session_stats(session_id: str, _: CurrentUser) -> dict:
     stats = masker.session_stats(session_id)
     if not stats:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
@@ -321,7 +378,7 @@ async def session_stats(session_id: str) -> dict:
 
 
 @app.delete("/v1/session/{session_id}")
-async def clear_session(session_id: str) -> dict:
+async def clear_session(session_id: str, _: CurrentUser) -> dict:
     masker.clear_session(session_id)
     return {"cleared": session_id}
 

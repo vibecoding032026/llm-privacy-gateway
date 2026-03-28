@@ -5,7 +5,12 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 python-multipart>=0.0.12
 
+# Auth & RBAC
+bcrypt==4.1.3
+PyJWT==2.8.0
+
 # RAG / Knowledge Base
+pdf2image>=1.16.3       # chuyển PDF sang ảnh (cần poppler)
 langchain==0.2.16
 langchain-community==0.2.16
 langchain-openai==0.1.25
@@ -16,3 +21,4 @@ python-docx==1.1.2
 
 # Streamlit UI
 streamlit==1.38.0
+pandas>=2.0.0
